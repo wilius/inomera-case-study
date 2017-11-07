@@ -2,21 +2,45 @@ package org.wilius.inomera.datastructure;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.wilius.inomera.datastructure.exception.InvalidExactRouteParameterException;
+import org.wilius.inomera.datastructure.exception.InvalidRouteException;
+import org.wilius.inomera.datastructure.exception.NodeNotFoundException;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.StringTokenizer;
 
+/**
+ * This class create to demonstrate the graph representation of the input
+ */
 public class Graph {
     private final Logger log = LoggerFactory.getLogger(Graph.class);
 
+    /**
+     * List of the available nodes in graph instance
+     */
     private ArrayList<Node> nodes;
 
+    /**
+     * creates a new graph instance with given routes
+     *
+     * @param routes this parameter described at {{@link #init(String)}} in detail.
+     */
     public Graph(String routes) {
         nodes = new ArrayList<>();
         init(routes);
     }
 
+    /**
+     * parses the routes to their Graph representation
+     *
+     * @param routes string to parse as Graph object. Each way should be delimited by a comma and
+     *               nodes should be named with a latin letter. For example AB55 demonstrates that
+     *               there are two node called A and B respectively and the distance between these
+     *               nodes are 55 unit. An example of full node as below:
+     *               <p>
+     *               AB5, BC4, CD8, DC8, DE6, AD5, CE2, EB3, AE7
+     */
     private void init(String routes) {
         StringTokenizer tokenizer = new StringTokenizer(routes, ",");
 
@@ -26,23 +50,105 @@ public class Graph {
                 throw new RuntimeException(String.format("Input %s is not proper", route));
             }
 
-            String from = String.valueOf(route.charAt(0));
-            String to = String.valueOf(route.charAt(1));
+            char from = route.charAt(0);
+            char to = route.charAt(1);
             BigInteger distance = new BigInteger(route.substring(2));
-            addRoute(from, to, distance);
+            addWay(from, to, distance);
             log.info("Route from {} to {} with distance {}", from, to, distance.toString());
         }
     }
 
-    private void addRoute(final String from, String to, BigInteger distance) {
-        get(from, true).addWay(get(to, true), distance);
+    /**
+     * Looking for a route and calculates the distance for route
+     *
+     * @param fromName      initial node of the trip
+     * @param pathNodeNames node names of the trip that we want to check the availability
+     * @return the distance of the route
+     * @throws InvalidRouteException when no route exists with given path
+     */
+    public BigInteger getRouteDistance(char fromName, char... pathNodeNames) {
+        try {
+            Route route = findExactPath(fromName, pathNodeNames);
+            return route.getDistance();
+        } catch (InvalidRouteException e) {
+            return null;
+        }
     }
 
-    private Node get(String name) {
+    /**
+     * finds the number of the routes which has stop amount less than or equal to the given parameter
+     *
+     * @param from          starting node of the trip
+     * @param to            destination node of the trip
+     * @param maxStopAmount maximum amount of the stop
+     * @return number of the routes which are appropriate to the given situation
+     */
+    public long getNumberOfTripsWithMaxStop(char from, char to, final int maxStopAmount) {
+        return findPaths(from, to).stream()
+                .filter(x -> x.getStopAmount() <= maxStopAmount)
+                .count();
+    }
+
+    /**
+     * finds the number of the routes with given stop amount
+     *
+     * @param from       starting node of the trip
+     * @param to         destination node of the trip
+     * @param stopAmount amount of the stop
+     * @return number of the routes which are appropriate to the given situation
+     */
+    public long getNumberOfRoutesWithExactStop(char from, char to, final int stopAmount) {
+        return findPaths(from, to).stream()
+                .filter(x -> x.getStopAmount() == stopAmount)
+                .count();
+    }
+
+    /**
+     * finds the minimum distance between the nodes
+     *
+     * @param from starting node of the trip
+     * @param to   destination node of the trip
+     * @return the shortest distance or null if no route is available
+     */
+    public BigInteger getShortestRoute(char from, char to) {
+        ArrayList<Route> routes = findPaths(from, to);
+        return getMinimumDistance(routes);
+    }
+
+    /**
+     * finds the number of routes whom distance is less than the maxDistance parameter
+     *
+     * @param from        starting node of the trip
+     * @param to          destination node of the trip
+     * @param maxDistance allowed maximum distance
+     * @return the amount of the routes between nodes
+     */
+    public long getNumberOfTripsWithDistanceLessThan(char from, char to, BigInteger maxDistance) {
+        return findPaths(from, to).stream()
+                .filter(x -> x.getDistance().compareTo(maxDistance) <= 0)
+                .count();
+    }
+
+    /**
+     * A shortcut of the function {{@link #get(char, boolean)}}.
+     * Not creates a new instance if the node not found.
+     *
+     * @param name name of the node to find
+     * @return {@link Node} representation of the name parameter
+     */
+    private Node get(char name) {
         return get(name, false);
     }
 
-    private Node get(String name, boolean addIfNotExists) {
+    /**
+     * gets the node representation of the node name
+     *
+     * @param name           name of the {@link Node} to find
+     * @param addIfNotExists adds a node with first parameter if specified as true
+     * @return {@link Node} representation of the name parameter
+     * @throws NodeNotFoundException if node not founded and second parameter specified as false
+     */
+    private Node get(char name, boolean addIfNotExists) {
         for (Node node : nodes) {
             if (node.is(name)) {
                 return node;
@@ -50,7 +156,7 @@ public class Graph {
         }
 
         if (!addIfNotExists) {
-            throw new RuntimeException(String.format("Node with name %s not founded", name));
+            throw new NodeNotFoundException(String.format("Node with name %s not founded", name));
         }
 
         Node node = new Node(name);
@@ -58,84 +164,68 @@ public class Graph {
         return node;
     }
 
-    public ArrayList<ArrayList<Node.Way>> findPaths(String fromName, String toName) {
-        Node from = get(fromName);
-        Node to = get(toName);
-        return from.findPaths(to);
-    }
+    /**
+     * Looking for an exact path with given parameters.
+     *
+     * @param fromName      starting node of trip
+     * @param pathNodeNames node names of the trip that we want to check the availability
+     * @return {@link Route} representation of the given path
+     * @throws InvalidRouteException               when no route exists with given path
+     * @throws InvalidExactRouteParameterException if no path nodes specified
+     */
+    private Route findExactPath(char fromName, char... pathNodeNames) {
+        if (pathNodeNames.length == 0) {
+            throw new InvalidExactRouteParameterException("No parameter for the destination specified");
+        }
 
-    public ArrayList<Node.Way> findPath(String fromName, String... nodeNames) {
         Node from = get(fromName);
 
         ArrayList<Node> path = new ArrayList<>();
         path.add(from);
-        for (String nodeName : nodeNames) {
-            Node node = get(nodeName);
-            path.add(node);
+        for (char nodeName : pathNodeNames) {
+            path.add(get(nodeName));
         }
 
         return from.findPath(path);
     }
 
-    public BigInteger getRouteLength(String fromName, String... nodeNames) {
-        ArrayList<Node.Way> path = findPath(fromName, nodeNames);
-        if (path.size() == 0) {
+
+    /**
+     * Finds the minimum distance among the given routes
+     *
+     * @param routes List
+     * @return minimum distance among the routes. returns null if the parameter is null or its size is zero
+     */
+    private BigInteger getMinimumDistance(ArrayList<Route> routes) {
+        if (routes == null || routes.size() == 0) {
             return null;
         }
 
-        return path.stream()
-                .map(Node.Way::getDistance)
-                .reduce(BigInteger::add)
+        return routes.stream()
+                .map(Route::getDistance)
+                .min(BigInteger::compareTo)
                 .get();
     }
 
-    public long getNumberOfTripsWithMaxStop(String from, String to, final int maxStopAmount) {
-        return get(from).findPaths(get(to)).stream().filter(x -> x.size() <= maxStopAmount).count();
+    /**
+     * converts String parameters to their {@link Node} representation and triggers the route finding algorithm
+     *
+     * @param from starting point of the trip
+     * @param to   terminal node of the trip
+     * @return list of available routes
+     */
+    private ArrayList<Route> findPaths(char from, char to) {
+        return get(from).findPaths(get(to));
     }
 
-    public long getNumberOfTripsWithExactStop(String from, String to, final int stopAmount) {
-        return get(from).findPaths(get(to)).stream().filter(x -> x.size() == stopAmount).count();
-    }
-
-    public BigInteger getShortestRoute(String from, String to) {
-        ArrayList<ArrayList<Node.Way>> routes = get(from).findPaths(get(to));
-        if (routes.size() == 0) {
-            return null;
-        }
-
-        BigInteger min = BigInteger.ZERO;
-        for (ArrayList<Node.Way> route : routes) {
-            BigInteger routeLength = route.stream()
-                    .map(Node.Way::getDistance)
-                    .reduce(BigInteger::add)
-                    .get();
-
-            if (min.equals(BigInteger.ZERO) || routeLength.compareTo(min) < 0) {
-                min = routeLength;
-            }
-        }
-
-        return min;
-    }
-
-    public int getNumberOfTripsWithDistanceLessThan(String from, String to, BigInteger maxDistace) {
-        ArrayList<ArrayList<Node.Way>> routes = get(from).findPaths(get(to));
-        if (routes.size() == 0) {
-            return 0;
-        }
-
-        int count = 0;
-        for (ArrayList<Node.Way> route : routes) {
-            BigInteger routeLength = route.stream()
-                    .map(Node.Way::getDistance)
-                    .reduce(BigInteger::add)
-                    .get();
-
-            if (routeLength.compareTo(maxDistace) <= 0) {
-                count++;
-            }
-        }
-
-        return count;
+    /**
+     * adds a new way to from node
+     *
+     * @param from     node to add a new way
+     * @param to       destination of the way for from parameter
+     * @param distance distance between from and to parameters
+     */
+    private void addWay(char from, char to, BigInteger distance) {
+        get(from, true).addWay(get(to, true), distance);
     }
 }
